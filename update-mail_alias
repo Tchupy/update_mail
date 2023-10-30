@@ -1,0 +1,226 @@
+#!/usr/bin/env python3
+
+import requests
+import json
+import configparser
+import socket
+from os.path import expanduser
+from urllib3.exceptions import InsecureRequestWarning
+
+# get API keys from file 
+cfg = configparser.ConfigParser()
+cfg.read(expanduser('~/.key/mail.cfg'))
+if len(cfg.sections()) == 0:
+    print("No cfg file found, please create '~/.key/mail.cfg' file")
+    exit()
+
+try:
+    mail_hosting_id = cfg['INFOMANIAK']['mail_hosting_id']
+    mailbox_name = cfg['INFOMANIAK']['mailbox_name']
+    url_base = cfg['INFOMANIAK']['url_base']
+    api = cfg['INFOMANIAK']['api']
+    domain = cfg['INFOMANIAK']['domain']
+except:
+    print("Error fetching API data. check your ~/.key/mail.cfg file")
+    exit()
+
+mail_url = url_base + mail_hosting_id + "/mailboxes/" + mailbox_name + "/aliases"
+
+#payload = json.dumps({
+#  "aliases": [
+#    "tchup",
+#    "admin"
+#  ]
+#})
+
+
+headers = {
+  'Content-Type': 'application/json',
+  'Authorization' : 'Bearer ' + api
+}
+
+class bcolors:
+    HEADER = '\033[95m'
+    OKBLUE = '\033[94m'
+    OKCYAN = '\033[96m'
+    OKGREEN = '\033[92m'
+    WARNING = '\033[93m'
+    FAIL = '\033[91m'
+    ENDC = '\033[0m'
+    BOLD = '\033[1m'
+    UNDERLINE = '\033[4m'
+
+
+################################################
+#
+#      test if orange proxy is needed
+#
+################################################
+
+def get_proxy():
+    proxy = { 
+            'http' : 'http://www-cache-obssa.si.fr.intraorange',
+            'https' : 'http://www-cache-obssa.si.fr.intraorange',
+    }
+    
+    try:
+        socket.getaddrinfo("20102020.xyz",443,family=socket.AF_INET,proto=socket.IPPROTO_TCP)
+        r = requests.request('GET','https://20102020.xyz',timeout=2)
+        proxy = {}
+    except socket.gaierror:
+        print("failed to resolve 20102020.xyz, check DNS server")
+    except requests.exceptions.ConnectionError:
+        print("failed to access 20102020.xyz, maybe a proxy ?")
+    except Exception as e:
+        print("Something goes wrong: ", e)
+    
+    if len(proxy) != 0:
+        try:
+            socket.getaddrinfo("welcome.com.intraorange",443,family=socket.AF_INET,proto=socket.IPPROTO_TCP)
+            requests.packages.urllib3.disable_warnings(category=InsecureRequestWarning)
+            r = requests.request('GET','https://welcome.com.intraorange',timeout=2,verify=False)
+        except socket.gaierror:
+            print("failed to resolve intranet, check DNS server")
+            exit()
+        except exception as e:
+            print("Something goes wrong: ", e)
+
+    return proxy
+
+################################################
+#
+#      list aliases
+#
+################################################
+
+def list_aliases(proxy={}):
+    try:
+        response = requests.request("GET", mail_url, headers=headers,proxies=proxy)
+        alias = response.json()['data']['aliases']
+    except:
+        print(f"request failed to reach: {response.url}")
+        print(f"status code: {response.status_code}")
+        print(f"error reason: {response.reason}")
+        exit()
+    alias.sort()
+
+    # display results
+    #title=("List aliases for address " + bcolors.OKCYAN + response.json()['address'] + bcolors.ENDC )
+    title=("List aliases for address " + bcolors.OKCYAN + mailbox_name + '@' + domain + bcolors.ENDC )
+    print("\n" + title + "\n")
+    for k in alias:
+         print("        " + k.ljust(21) )
+            
+    return
+
+
+################################################
+#
+#      patch new alias
+#
+################################################
+
+def patch_alias(action,proxy={}):
+    response = requests.request("GET", url_base + domain + "/" + mailbox, headers=headers,proxies=proxy)
+    payload = {"aliases" : response.json()['aliases'] }
+
+    if action == 'NEW':
+        new_alias = input(bcolors.OKCYAN + 'Alias to add: ' + bcolors.ENDC)
+        if new_alias not in payload['aliases']:
+            payload['aliases'].append(new_alias)
+    elif action == 'DEL':
+        new_alias = input(bcolors.OKCYAN + 'Alias to del: ' + bcolors.ENDC)
+        if new_alias in payload['aliases']:
+            payload['aliases'].remove(new_alias)
+
+    response = requests.request("PATCH", url_base + domain + "/" + mailbox, headers=headers,json=payload,proxies=proxy)
+    if response:
+        print("Mailbox has been updated")
+
+
+################################################
+#
+#      update aliases (infomaniak)
+#
+################################################
+# add alias : /1/mail_hostings/{mail_hosting_id}/mailboxes/{mailbox_name}/aliases
+#   body = {'alias' : 'my_new_alias'}
+# remove alias : /1/mail_hostings/{mail_hosting_id}/mailboxes/{mailbox_name}/aliases/{alias}
+
+
+def update_aliases(action,proxy={}):
+    if action == 'NEW':
+        new_alias = input(bcolors.OKCYAN + 'Alias to add: ' + bcolors.ENDC)
+        payload = dict(alias=new_alias) 
+        try :
+            response = requests.request('POST',mail_url,headers=headers, json=payload,proxies=proxy)
+        except:
+            print(f"request failed to reach: {response.url}")
+            print(f"status code: {response.status_code}")
+            print(f"error reason: {response.reason}")
+            exit()
+    elif action == 'DEL':
+        new_alias = input(bcolors.OKCYAN + 'Alias to del: ' + bcolors.ENDC)
+        try :
+            response = requests.request('DELETE',mail_url + "/" + new_alias,headers=headers, proxies=proxy)
+        except:
+            print(f"request failed to reach: {response.url}")
+            print(f"status code: {response.status_code}")
+            print(f"error reason: {response.reason}")
+            exit()
+
+    if response:
+        print("Mailbox has been updated")
+    else:
+        print(f"There's an issue, mailbox not updated : {response.text}")
+
+            
+################################################
+#
+#       quit
+#
+################################################
+
+def leave():
+    # function to exit script
+    print('Leaving..')
+    pass
+
+################################################
+#
+#       MAIN
+#
+################################################
+
+def main():
+    proxy=get_proxy()
+    choice = 0
+    while choice != '9':
+        # Menu string
+        choice = input(bcolors.OKCYAN + """
+1 - Display all aliases
+2 - Add a new alias
+3 - Delete an alias
+9 - Quit
+Your choice : """)
+        if (choice == '1'):
+            list_aliases(proxy)
+        elif (choice== '2'):
+            update_aliases('NEW',proxy)
+        elif (choice == '3'):
+            update_aliases('DEL',proxy)
+        elif (choice == '9'):
+            leave();
+    return
+
+if __name__ == "__main__":
+#    import cProfile,pstats
+#    profiler = cProfile.Profile()
+#    profiler.enable()
+     main()
+#    profiler.disable()
+#    stats = pstats.Stats(profiler).sort_stats('tottime')
+#    stats.print_stats()
+
+
+
